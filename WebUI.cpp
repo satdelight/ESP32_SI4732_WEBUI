@@ -212,7 +212,8 @@ function renderButtons(mode, step_khz){
 
 async function loadBands(){
   try{
-    const r = await fetch('/api/bands'); const j = await r.json();
+    const r = await fetch('/api/bands', {cache:'no-store'});
+    const j = await r.json();
     bandList = (j.items||[]).map(x=>({idx:x.idx, name:String(x.name||'')}));
     renderGroups();
     if (typeof j.current_idx === 'number') currentBandIdx = j.current_idx, highlightActive();
@@ -221,7 +222,8 @@ async function loadBands(){
 
 async function getStatus(){
   try{
-    const r = await fetch('/api/status'); const j = await r.json();
+    const r = await fetch('/api/status', {cache:'no-store'});
+    const j = await r.json();
     document.getElementById('freq').textContent = j.freq_str;
     document.getElementById('mode').textContent = j.mode;
     document.getElementById('bandtext').textContent = j.band;
@@ -284,7 +286,7 @@ static const char WIFI_HTML[] PROGMEM = R"HTML(<!doctype html>
 
 // ===== Routen =====
 static void setupRoutes() {
-  // HTML-Seiten: sicher als text/html ausliefern
+  // HTML-Seiten
   server.on("/", HTTP_GET, [](AsyncWebServerRequest* req) {
     req->send_P(200, "text/html; charset=utf-8", INDEX_HTML);
   });
@@ -292,7 +294,7 @@ static void setupRoutes() {
     req->send_P(200, "text/html; charset=utf-8", WIFI_HTML);
   });
 
-  // WLAN-POST: kein automatischer Neustart (verhindert Reset-Schleifen)
+  // WLAN-POST
   server.on("/wifi", HTTP_POST, [](AsyncWebServerRequest* req) {
     String ssid = req->hasParam("ssid", true) ? req->getParam("ssid", true)->value() : "";
     String pass = req->hasParam("pass", true) ? req->getParam("pass", true)->value() : "";
@@ -317,7 +319,7 @@ static void setupRoutes() {
     }
   });
 
-  // API: Bands
+  // API: Bands (no-cache)
   server.on("/api/bands", HTTP_GET, [](AsyncWebServerRequest* req) {
     const int total = bandCount();
     StaticJsonDocument<2048> doc;
@@ -330,7 +332,11 @@ static void setupRoutes() {
       o["name"] = band[i].bandName;
     }
     String out; serializeJson(doc, out);
-    req->send(200, "application/json", out);
+    AsyncWebServerResponse* res = req->beginResponse(200, "application/json", out);
+    res->addHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    res->addHeader("Pragma", "no-cache");
+    res->addHeader("Expires", "0");
+    req->send(res);
   });
 
   // API: Band setzen
@@ -353,7 +359,7 @@ static void setupRoutes() {
     req->send(200, "text/plain", "OK");
   });
 
-  // API: Status (+ RDS-PS für FM)
+  // API: Status (+ PS) – no-cache
   server.on("/api/status", HTTP_GET, [](AsyncWebServerRequest* req) {
     rx.getCurrentReceivedSignalQuality();
     int8_t rssi = rx.getCurrentRSSI();
@@ -375,16 +381,15 @@ static void setupRoutes() {
     doc["snr_db"]    = snr;
     doc["net_mode"]  = (WiFi.getMode() & WIFI_AP) ? "AP" : "STA";
     doc["ip"]        = ((WiFi.getMode() & WIFI_AP) ? WiFi.softAPIP() : WiFi.localIP()).toString();
-    // FM: PS mitsenden, sonst leer
-    if (rx.isCurrentTuneFM()) {
-      doc["ps"] = rdsPSShown; // max 8 Zeichen
-    } else {
-      doc["ps"] = "";
-    }
+    doc["ps"]        = rx.isCurrentTuneFM() ? rdsPSShown : "";
 
     String out;
     serializeJson(doc, out);
-    req->send(200, "application/json", out);
+    AsyncWebServerResponse* res = req->beginResponse(200, "application/json", out);
+    res->addHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    res->addHeader("Pragma", "no-cache");
+    res->addHeader("Expires", "0");
+    req->send(res);
   });
 
   // API: Tuning
@@ -419,7 +424,7 @@ static void setupRoutes() {
   });
 }
 
-// ===== Serverstart (Netzwerk-Stack sicherstellen) =====
+// ===== Serverstart =====
 namespace {
   bool serverStarted = false;
 }
@@ -427,12 +432,10 @@ namespace {
 namespace WebUI {
 
 void begin() {
-  // Netzwerkstack initialisieren (ohne Neustarts)
   if (WiFi.getMode() == WIFI_MODE_NULL) {
     WiFi.mode(WIFI_AP_STA);
   }
 
-  // Kurz STA mit gespeicherten Credentials versuchen
   if (WiFi.getMode() & WIFI_STA) {
     WiFi.begin();
     uint32_t t0 = millis();
@@ -441,7 +444,6 @@ void begin() {
     }
   }
 
-  // AP-Fallback
   if (WiFi.status() != WL_CONNECTED) {
     if (!(WiFi.getMode() & WIFI_AP)) {
       WiFi.mode(WIFI_AP_STA);
